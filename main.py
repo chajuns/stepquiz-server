@@ -58,7 +58,9 @@ async def generate_quiz(
     question_count: int = Form(...),
     question_type: str = Form(...),
     language: str = Form(...),
+    custom_prompt: str = Form(None),
 ):
+    print(f"=== [DEBUG] 들어온 커스텀 프롬프트: {custom_prompt} ===")
     pdf_document = None
     try:
         # 4. PDF 파일 읽기
@@ -102,6 +104,12 @@ async def generate_quiz(
             )
 
         # 6. 다듬은 프롬프트 (역할·제약·출력 형식 명확화)
+        custom_prompt_block = f"""
+[사용자 특별 지시사항 (절대 규칙 - 최우선 반영)]
+아래 내용은 사용자가 직접 작성한 커스텀 요청사항입니다. 기본 규칙과 충돌하더라도 아래 내용을 무조건 최우선으로 반영하여 문제를 출제하세요. (예: 힌트 추가, 특정 말투 사용 등)
+"{custom_prompt}"
+""" if custom_prompt else ""
+
         prompt = f"""
 당신은 교육용 퀴즈 출제 전문가입니다. 아래에 제공된 이미지들은 **한 PDF 문서의 페이지를 순서대로** 촬영한 것입니다. 이미지를 시각적으로 분석하여 텍스트·수식·표·도표를 정확히 읽어내세요.
 
@@ -118,7 +126,7 @@ async def generate_quiz(
    - OX: options는 반드시 ["O", "X"].
    - 단답식: options는 반드시 빈 배열 [].
 4. 출력은 **오직 유효한 JSON 배열 하나**만 하세요. ```json 같은 마크다운, 설명, 주석, 접두/접미 문구는 절대 포함하지 마세요.
-
+{custom_prompt_block}
 [출력 형식]
 [
   {{"question": "문제 문장", "options": ["A", "B", "C", "D"], "answer": "정답", "explanation": "해설"}},

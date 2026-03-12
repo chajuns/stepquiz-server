@@ -1,6 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import google.generativeai as genai
 import fitz  # PyMuPDF
 from PIL import Image
@@ -28,11 +27,6 @@ genai.configure(api_key=api_key)
 
 # 3. Vision 지원 모델
 model = genai.GenerativeModel("gemini-2.5-flash")
-
-
-class FlashPromptRequest(BaseModel):
-    prompt: str
-    question_count: int
 
 
 def _parse_quiz_json(result_text: str, max_count: int) -> list:
@@ -80,10 +74,10 @@ async def generate_quiz(
                 status_code=400,
                 detail="한 번에 최대 50페이지까지 선택할 수 있습니다.",
             )
-        if question_count < 1 or question_count > 50:
+        if question_count < 1 or question_count > 100:
             raise HTTPException(
                 status_code=400,
-                detail="문제 수는 1~50개 사이로 지정해 주세요.",
+                detail="문제 수는 1~100개 사이로 지정해 주세요.",
             )
 
         # 5. PDF 페이지를 고화질 이미지(PIL)로 변환
@@ -110,6 +104,47 @@ async def generate_quiz(
 "{custom_prompt}"
 """ if custom_prompt else ""
 
+        # question_type에 따라 해당 유형 규칙만 포함
+        if question_type == "4지선다":
+            type_rule_block = """
+3. '4지선다' 유형별 규칙:
+   - 4지선다: 
+     * options는 반드시 4개.
+     * 유일무이한 정답: 4개의 선지 중 정답은 오직 단 1개여야 하며, 논란의 여지가 없어야 합니다.
+     * 상호 배타적 선지: 선지들끼리 의미가 겹치거나 한 선지가 다른 선지를 포괄하지 않도록 완전히 독립적으로 구성하세요.
+     * 매력적이지만 명백한 오답: 나머지 3개의 오답 선지는 사용자가 헷갈릴 만큼 주제와 관련성이 높아야 하지만, 객관적 사실(PDF 내용)에 명백하게 위배되는 '100% 오답'으로만 구성하세요.
+"""
+        elif question_type == "OX":
+            type_rule_block = """
+3. 'OX' 유형별 규칙:
+   - OX: options는 반드시 ["O", "X"].
+"""
+        elif question_type == "단답식":
+            type_rule_block = """
+3. '단답식' 유형별 규칙:
+   - 단답식: 
+     * options는 반드시 빈 배열 [].
+     * 정답(answer)은 무조건 15글자 이내의 핵심 명사, 고유명사, 혹은 숫자로만 작성하세요.
+     * 정답에 띄어쓰기, 특수기호, 쉼표(,), '및/과/와' 같은 연결어나 조사가 절대 포함되지 않게 하세요. (문장형, 서술형 절대 금지)
+     * 문제는 매우 명확하고 구체적으로 출제하여, 다른 해석의 여지 없이 오직 하나의 정답만 도출되도록 만드세요.
+"""
+        else:
+            # 예외적으로 알 수 없는 유형이 들어오면 기존 전체 규칙을 그대로 사용
+            type_rule_block = """
+3. '{question_type}' 유형별 규칙:
+   - 4지선다: 
+     * options는 반드시 4개.
+     * 유일무이한 정답: 4개의 선지 중 정답은 오직 단 1개여야 하며, 논란의 여지가 없어야 합니다.
+     * 상호 배타적 선지: 선지들끼리 의미가 겹치거나 한 선지가 다른 선지를 포괄하지 않도록 완전히 독립적으로 구성하세요.
+     * 매력적이지만 명백한 오답: 나머지 3개의 오답 선지는 사용자가 헷갈릴 만큼 주제와 관련성이 높아야 하지만, 객관적 사실(PDF 내용)에 명백하게 위배되는 '100% 오답'으로만 구성하세요.
+   - OX: options는 반드시 ["O", "X"].
+   - 단답식: 
+     * options는 반드시 빈 배열 [].
+     * 정답(answer)은 무조건 15글자 이내의 핵심 명사, 고유명사, 혹은 숫자로만 작성하세요.
+     * 정답에 띄어쓰기, 특수기호, 쉼표(,), '및/과/와' 같은 연결어나 조사가 절대 포함되지 않게 하세요. (문장형, 서술형 절대 금지)
+     * 문제는 매우 명확하고 구체적으로 출제하여, 다른 해석의 여지 없이 오직 하나의 정답만 도출되도록 만드세요.
+"""
+
         prompt = f"""
 당신은 교육용 퀴즈 출제 전문가입니다. 아래에 제공된 이미지들은 **한 PDF 문서의 페이지를 순서대로** 촬영한 것입니다. 이미지를 시각적으로 분석하여 텍스트·수식·표·도표를 정확히 읽어내세요.
 
@@ -121,10 +156,7 @@ async def generate_quiz(
 [엄격한 제약]
 1. 보기(options) 각 항목: 20자 이하. 핵심만 간결하게.
 2. 해설(explanation): 40자 이하. 간단명료하게.
-3. '{question_type}' 유형별 규칙:
-   - 4지선다: options는 반드시 4개.
-   - OX: options는 반드시 ["O", "X"].
-   - 단답식: options는 반드시 빈 배열 [].
+{type_rule_block}
 4. 출력은 **오직 유효한 JSON 배열 하나**만 하세요. ```json 같은 마크다운, 설명, 주석, 접두/접미 문구는 절대 포함하지 마세요.
 {custom_prompt_block}
 [출력 형식]
@@ -160,52 +192,24 @@ async def generate_quiz(
             pdf_document.close()
 
 
-@app.post("/flash-prompt")
-async def flash_prompt(body: FlashPromptRequest):
-    """사용자 프롬프트를 Gemini Flash에 넘겨 퀴즈 question_count개 생성. PDF 없이 텍스트만 사용."""
-    prompt_text = (body.prompt or "").strip()
-    question_count = body.question_count
-
-    if not prompt_text:
-        raise HTTPException(status_code=400, detail="prompt가 비어 있습니다.")
-    if question_count < 1 or question_count > 50:
-        raise HTTPException(status_code=400, detail="문제 수는 1~50개 사이로 지정해 주세요.")
-
-    prompt = f"""
-당신은 교육용 퀴즈 출제 전문가입니다. 아래 [사용자 지시]에 따라 퀴즈를 생성하세요.
-
-[사용자 지시]
-{prompt_text}
-
-[작업]
-1. 위 지시에 맞는 퀴즈를 정확히 {question_count}개 생성하세요.
-2. 사용자가 형식(4지선다, OX, 단답식 등)을 지정했으면 그에 따르고, 없으면 4지선다로 생성하세요.
-3. 보기(options) 각 항목: 20자 이하. 해설(explanation): 40자 이하.
-4. 4지선다일 때 options는 반드시 4개, OX일 때 ["O", "X"], 단답식일 때 [].
-5. 출력은 **오직 유효한 JSON 배열 하나**만 하세요. ```json 같은 마크다운, 설명, 주석은 포함하지 마세요.
-
-[출력 형식]
-[
-  {{"question": "문제 문장", "options": ["A", "B", "C", "D"], "answer": "정답", "explanation": "해설"}},
-  ...
-]
-"""
-
+@app.post("/pdf-page-count")
+async def pdf_page_count(file: UploadFile = File(...)):
+    """업로드된 PDF의 총 페이지 수 반환."""
+    pdf_document = None
     try:
-        response = model.generate_content(prompt)
-        result_text = response.text.strip()
-        quiz_data = _parse_quiz_json(result_text, question_count)
-        return {"quizzes": quiz_data}
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"퀴즈 JSON 파싱 실패: {str(e)}",
-        )
+        contents = await file.read()
+        pdf_document = fitz.open(stream=contents, filetype="pdf")
+        num_pages = len(pdf_document)
+        if num_pages <= 0:
+            raise HTTPException(status_code=400, detail="PDF 페이지 수를 확인할 수 없습니다.")
+        return {"total_pages": num_pages}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"서버 에러 발생: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=f"PDF 페이지 수 계산 실패: {str(e)}")
+    finally:
+        if pdf_document is not None:
+            pdf_document.close()
 
 
 if __name__ == "__main__":

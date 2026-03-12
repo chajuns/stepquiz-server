@@ -123,7 +123,8 @@ async def generate_quiz(
             type_rule_block = """
 3. '단답식' 유형별 규칙:
    - 단답식: 
-     * options는 반드시 빈 배열 [].
+     * options는 절대 넣지 마세요. 단답식에서는 options 필드를 반드시 빈 배열 []만 출력하세요. ["O", "X"]나 4지선다형 보기를 절대 포함하지 마세요.
+     * 참/거짓(O/X)을 묻는 문제는 출제하지 마세요. 단답식은 O, X를 정답으로 하는 문제가 아닙니다. OX 유형이 필요한 경우가 아니면 참·거짓 판단 문제를 내지 마세요.
      * 정답(answer)은 무조건 15글자 이내의 핵심 명사, 고유명사, 혹은 숫자로만 작성하세요.
      * 정답에 띄어쓰기, 특수기호, 쉼표(,), '및/과/와' 같은 연결어나 조사가 절대 포함되지 않게 하세요. (문장형, 서술형 절대 금지)
      * 문제는 매우 명확하고 구체적으로 출제하여, 다른 해석의 여지 없이 오직 하나의 정답만 도출되도록 만드세요.
@@ -172,6 +173,20 @@ async def generate_quiz(
         # 8. JSON 응답 파싱 및 마크다운 클리닝
         result_text = response.text.strip()
         quiz_data = _parse_quiz_json(result_text, question_count)
+
+        # 단답식 후처리: options 강제 [], O/X 정답 문제 제거
+        if question_type == "단답식":
+            normalized = []
+            for item in quiz_data:
+                if not isinstance(item, dict):
+                    continue
+                item = dict(item)
+                item["options"] = []
+                answer = (item.get("answer") or "").strip().upper()
+                if answer in ("O", "X"):
+                    continue
+                normalized.append(item)
+            quiz_data = normalized[:question_count]
 
         return {"quizzes": quiz_data}
 
